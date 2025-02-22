@@ -142,10 +142,12 @@ class RKLLMLoaderClass:
         # The tokenizer outputs as a Python list.
         return (ctype * len(tokens))(*tokens)
     # Run inference
-    def run(self, prompt):       
+    def run(self, prompt, max_tokens=None):
         self.rkllm_infer_params = RKLLMInferParam()
         ctypes.memset(ctypes.byref(self.rkllm_infer_params), 0, ctypes.sizeof(RKLLMInferParam))
         self.rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GENERATE
+        if max_tokens is not None:
+            self.rkllm_infer_params.max_new_tokens = max_tokens
         self.rkllm_input = RKLLMInput()
         self.rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_TOKEN
         self.rkllm_input.input_data.token_input.input_ids = self.tokens_to_ctypes_array(prompt, ctypes.c_int)
@@ -157,12 +159,13 @@ class RKLLMLoaderClass:
         self.rkllm_abort(self.handle)
         self.rkllm_destroy(self.handle)
     # Retrieve the output from the RKLLM model and print it in a streaming manner
-    def get_RKLLM_output(self, message, history):
+    def get_RKLLM_output(self, message, history=None, max_tokens=None, temperature=None, top_p=None, frequency_penalty=None, presence_penalty=None):
         # Link global variables to retrieve the output information from the callback function
         global global_text, global_state
         global_text = []
         global_state = -1
         user_prompt = {"role": "user", "content": message}
+        history = history or []
         history.append(user_prompt)
         # Gemma 2 does not support system prompt.
         if self.system_prompt == "":
@@ -172,32 +175,23 @@ class RKLLMLoaderClass:
                 {"role": "system", "content": self.system_prompt},
                 user_prompt
             ]
-        # print(prompt)
-        TOKENIZER_PATH="%s/%s"%(MODEL_PATH,self.st_model_id.replace("/","-"))
-        if not os.path.exists(TOKENIZER_PATH):
-            print("Tokenizer not cached locally, downloading to %s"%TOKENIZER_PATH)
-            os.mkdir(TOKENIZER_PATH)
-            tokenizer = AutoTokenizer.from_pretrained(self.st_model_id, trust_remote_code=True)
-            tokenizer.save_pretrained(TOKENIZER_PATH)
-        else:
-            tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_PATH, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(self.st_model_id, trust_remote_code=True)
         prompt = tokenizer.apply_chat_template(prompt, tokenize=True, add_generation_prompt=True)
-        # response = {"role": "assistant", "content": "Loading..."}
         response = {"role": "assistant", "content": ""}
         history.append(response)
-        model_thread = threading.Thread(target=self.run, args=(prompt,))
+        model_thread = threading.Thread(target=self.run, args=(prompt, max_tokens))
         model_thread.start()
         model_thread_finished = False
         while not model_thread_finished:
             while len(global_text) > 0:
-                response["content"] += global_text.pop(0)
-                # Marco-o1
-                response["content"] = str(response["content"]).replace("<Thought>", "\\<Thought\\>")
-                response["content"] = str(response["content"]).replace("</Thought>", "\\<\\/Thought\\>")
-                response["content"] = str(response["content"]).replace("<Output>", "\\<Output\\>")
-                response["content"] = str(response["content"]).replace("</Output>", "\\<\\/Output\\>")
+                # response["content"] += global_text.pop(0)
+                # # Marco-o1
+                # response["content"] = str(response["content"]).replace("<Thought>", "\\<Thought\\>")
+                # response["content"] = str(response["content"]).replace("</Thought>", "\\<\\/Thought\\>")
+                # response["content"] = str(response["content"]).replace("<Output>", "\\<Output\\>")
+                # response["content"] = str(response["content"]).replace("</Output>", "\\<\\/Output\\>")
                 time.sleep(0.005)
                 # Gradio automatically pushes the result returned by the yield statement when calling the then method
-                yield response
+                yield global_text.pop(0)
             model_thread.join(timeout=0.005)
             model_thread_finished = not model_thread.is_alive()
